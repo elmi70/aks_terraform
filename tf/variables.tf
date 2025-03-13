@@ -31,7 +31,7 @@ variable "kubernetes_version" {
 variable "acr_name" {
   description = "Name of the Azure Container Registry - must be globally unique and only contain alphanumeric characters"
   type        = string
-  default     = "akscr"
+  default     = "akscrsahal"
 
   validation {
     condition     = can(regex("^[a-zA-Z0-9]+$", var.acr_name))
