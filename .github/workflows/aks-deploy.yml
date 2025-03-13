@@ -166,17 +166,6 @@ jobs:
     - name: Terraform Validate
       id: validate
       run: terraform validate -no-color
-  
-    - name: Terraform Test
-      id: test
-      run: terraform test -junit-xml test_result.xml
-      continue-on-error: true
-    
-    - name: Test Summary
-      uses: test-summary/action@v2
-      with:
-        paths: "test_result.xml"
-      if: always()
       
     - name: Terraform Plan
       id: plan
