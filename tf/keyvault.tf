@@ -8,7 +8,7 @@ resource "azurerm_key_vault" "aks_kv" {
   sku_name                   = "standard"
   soft_delete_retention_days = 7
   purge_protection_enabled   = false # Set to true for production
-  enable_rbac_authorization = true
+  enable_rbac_authorization  = true
 
   tags = var.tags
 }

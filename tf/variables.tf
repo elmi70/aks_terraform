@@ -32,7 +32,7 @@ variable "acr_name" {
   description = "Name of the Azure Container Registry - must be globally unique and only contain alphanumeric characters"
   type        = string
   default     = "akscr"
-  
+
   validation {
     condition     = can(regex("^[a-zA-Z0-9]+$", var.acr_name))
     error_message = "ACR name must only contain alphanumeric characters."
@@ -42,7 +42,7 @@ variable "acr_name" {
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)
-  default     = {
+  default = {
     Environment = "Development"
     ManagedBy   = "Terraform"
   }
@@ -82,7 +82,7 @@ variable "log_analytics_retention_days" {
   description = "Retention period in days for logs in Log Analytics workspace"
   type        = number
   default     = 30
-  
+
   validation {
     condition     = var.log_analytics_retention_days >= 30 && var.log_analytics_retention_days <= 730
     error_message = "Log Analytics retention days must be between 30 and 730."

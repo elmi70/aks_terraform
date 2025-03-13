@@ -8,7 +8,7 @@ terraform {
       source  = "hashicorp/azuread"
       version = "3.1.0"
     }
-    
+
   }
   backend "azurerm" {
     # These values will be filled by GitHub Actions
