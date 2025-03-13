@@ -255,7 +255,12 @@ jobs:
 
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
-    
+      
+    - name: Get Storage Key
+      run: |
+        ACCOUNT_KEY=$(az storage account keys list --resource-group $TERRAFORM_STATE_RG --account-name $TERRAFORM_STATE_STORAGE --query [0].value -o tsv)
+        echo "TERRAFORM_STATE_ACCESS_KEY=$ACCOUNT_KEY" >> $GITHUB_ENV
+        
     - name: Terraform Initialize
       run: |
         terraform init \
