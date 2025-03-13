@@ -11,6 +11,11 @@ on:
       - 'tf/**'
   workflow_dispatch:
 
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+  
 env:
   LOCATION: westeurope
   TERRAFORM_STATE_RG: aks-tfstate-rg
