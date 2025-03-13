@@ -164,13 +164,13 @@ jobs:
   
     - name: Terraform Test
       id: test
-      run: terraform test -junit-xml test_results.xml
+      run: terraform test -junit-xml test_result.xml
       continue-on-error: true
     
     - name: Test Summary
       uses: test-summary/action@v2
       with:
-        paths: "test_results.xml"
+        paths: "test_result.xml"
       if: always()
       
     - name: Terraform Plan
