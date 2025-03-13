@@ -22,12 +22,17 @@ env:
   TERRAFORM_STATE_STORAGE: akstfstatesahal
   TERRAFORM_STATE_CONTAINER: tfstate
   TERRAFORM_STATE_KEY: aks-cluster.tfstate
-  TERRAFORM_STATE_ACCESS_KEY: "" # will be set later
 
 jobs:
   setup-backend:
     name: Setup AKS Terraform State Backend
     runs-on: ubuntu-latest
+    outputs:
+      access_key: ${{ steps.create-storage.outputs.access_key }}
+      client_id: ${{ steps.extract-sp.outputs.client_id }}
+      client_secret: ${{ steps.extract-sp.outputs.client_secret }}
+      subscription_id: ${{ steps.extract-sp.outputs.subscription_id }}
+      tenant_id: ${{ steps.extract-sp.outputs.tenant_id }}
 
     steps:
     - name: Login to Azure
@@ -44,13 +49,7 @@ jobs:
         ARM_SUBSCRIPTION_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.subscriptionId')
         ARM_TENANT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.tenantId')
         
-        # Set as environment variables for Terraform
-        echo "ARM_CLIENT_ID=$ARM_CLIENT_ID" >> $GITHUB_ENV
-        echo "ARM_CLIENT_SECRET=$ARM_CLIENT_SECRET" >> $GITHUB_ENV
-        echo "ARM_SUBSCRIPTION_ID=$ARM_SUBSCRIPTION_ID" >> $GITHUB_ENV
-        echo "ARM_TENANT_ID=$ARM_TENANT_ID" >> $GITHUB_ENV
-        
-        # Also output for other jobs
+        # Output for future jobs
         echo "client_id=$ARM_CLIENT_ID" >> $GITHUB_OUTPUT
         echo "client_secret=$ARM_CLIENT_SECRET" >> $GITHUB_OUTPUT
         echo "subscription_id=$ARM_SUBSCRIPTION_ID" >> $GITHUB_OUTPUT
@@ -87,16 +86,9 @@ jobs:
           # Create a storage container (for the Terraform State)
           az storage container create --name $TERRAFORM_STATE_CONTAINER --account-name $TERRAFORM_STATE_STORAGE --account-key $ACCOUNT_KEY
 
-          echo "TERRAFORM_STATE_ACCESS_KEY=$ACCOUNT_KEY" >> $GITHUB_ENV
+          # Output the access key
           echo "access_key=$ACCOUNT_KEY" >> $GITHUB_OUTPUT
           echo "Terraform backend storage configured successfully in $TERRAFORM_STATE_RG"
-
-    outputs:
-      access_key: ${{ steps.create-storage.outputs.access_key }}
-      client_id: ${{ steps.extract-sp.outputs.client_id }}
-      client_secret: ${{ steps.extract-sp.outputs.client_secret }}
-      subscription_id: ${{ steps.extract-sp.outputs.subscription_id }}
-      tenant_id: ${{ steps.extract-sp.outputs.tenant_id }}
 
   terraform-plan:
     name: Plan AKS Cluster with Terraform
@@ -105,12 +97,6 @@ jobs:
     defaults:
       run:
         working-directory: ./tf
-    env:
-      TERRAFORM_STATE_ACCESS_KEY: ${{ needs.setup-backend.outputs.access_key }}
-      ARM_CLIENT_ID: ${{ needs.setup-backend.outputs.client_id }}
-      ARM_CLIENT_SECRET: ${{ needs.setup-backend.outputs.client_secret }}
-      ARM_SUBSCRIPTION_ID: ${{ needs.setup-backend.outputs.subscription_id }}
-      ARM_TENANT_ID: ${{ needs.setup-backend.outputs.tenant_id }}
 
     steps:
     - name: Checkout Repository
@@ -120,6 +106,19 @@ jobs:
       uses: azure/login@v2
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Set Terraform Environment Variables
+      run: |
+        # Set Service Principal credentials from previous job
+        echo "ARM_CLIENT_ID=${{ needs.setup-backend.outputs.client_id }}" >> $GITHUB_ENV
+        echo "ARM_CLIENT_SECRET=${{ needs.setup-backend.outputs.client_secret }}" >> $GITHUB_ENV
+        echo "ARM_SUBSCRIPTION_ID=${{ needs.setup-backend.outputs.subscription_id }}" >> $GITHUB_ENV
+        echo "ARM_TENANT_ID=${{ needs.setup-backend.outputs.tenant_id }}" >> $GITHUB_ENV
+        # Set Storage Access Key from previous job
+        echo "TERRAFORM_STATE_ACCESS_KEY=${{ needs.setup-backend.outputs.access_key }}" >> $GITHUB_ENV
+        
+        # Debug output (safely)
+        echo "Access key first 5 chars: ${TERRAFORM_STATE_ACCESS_KEY:0:5}..."
     
     - name: Verify Service Principal Permissions
       uses: azure/CLI@v2
@@ -156,6 +155,7 @@ jobs:
     - name: Terraform Initialize
       id: init
       run: |
+        echo "Running terraform init with access key starting with: ${TERRAFORM_STATE_ACCESS_KEY:0:5}..."
         terraform init \
           -backend-config="storage_account_name=$TERRAFORM_STATE_STORAGE" \
           -backend-config="container_name=$TERRAFORM_STATE_CONTAINER" \
@@ -226,12 +226,6 @@ jobs:
     defaults:
       run:
         working-directory: ./tf
-    env:
-      TERRAFORM_STATE_ACCESS_KEY: ${{ needs.setup-backend.outputs.access_key }}
-      ARM_CLIENT_ID: ${{ needs.setup-backend.outputs.client_id }}
-      ARM_CLIENT_SECRET: ${{ needs.setup-backend.outputs.client_secret }}
-      ARM_SUBSCRIPTION_ID: ${{ needs.setup-backend.outputs.subscription_id }}
-      ARM_TENANT_ID: ${{ needs.setup-backend.outputs.tenant_id }}
 
     steps:
     - name: Checkout Repository
@@ -241,6 +235,19 @@ jobs:
       uses: azure/login@v2
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Set Terraform Environment Variables
+      run: |
+        # Set Service Principal credentials from previous job
+        echo "ARM_CLIENT_ID=${{ needs.setup-backend.outputs.client_id }}" >> $GITHUB_ENV
+        echo "ARM_CLIENT_SECRET=${{ needs.setup-backend.outputs.client_secret }}" >> $GITHUB_ENV
+        echo "ARM_SUBSCRIPTION_ID=${{ needs.setup-backend.outputs.subscription_id }}" >> $GITHUB_ENV
+        echo "ARM_TENANT_ID=${{ needs.setup-backend.outputs.tenant_id }}" >> $GITHUB_ENV
+        # Set Storage Access Key from previous job
+        echo "TERRAFORM_STATE_ACCESS_KEY=${{ needs.setup-backend.outputs.access_key }}" >> $GITHUB_ENV
+        
+        # Debug output (safely)
+        echo "Access key first 5 chars: ${TERRAFORM_STATE_ACCESS_KEY:0:5}..."
 
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
