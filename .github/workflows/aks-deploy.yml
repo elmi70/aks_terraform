@@ -49,6 +49,11 @@ jobs:
         ARM_SUBSCRIPTION_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.subscriptionId')
         ARM_TENANT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.tenantId')
         
+        # Mask sensitive values in logs
+        echo "::add-mask::$ARM_SUBSCRIPTION_ID"
+        echo "::add-mask::$ARM_TENANT_ID"
+        echo "::add-mask::$ARM_CLIENT_ID"
+        
         # Output for future jobs
         echo "client_id=$ARM_CLIENT_ID" >> $GITHUB_OUTPUT
         echo "client_secret=$ARM_CLIENT_SECRET" >> $GITHUB_OUTPUT
@@ -83,6 +88,9 @@ jobs:
           # Retrieve the storage account key
           ACCOUNT_KEY=$(az storage account keys list --resource-group $TERRAFORM_STATE_RG --account-name $TERRAFORM_STATE_STORAGE --query [0].value -o tsv)
           
+          # Mask storage key in logs
+          echo "::add-mask::$ACCOUNT_KEY"
+          
           # Create a storage container (for the Terraform State)
           az storage container create --name $TERRAFORM_STATE_CONTAINER --account-name $TERRAFORM_STATE_STORAGE --account-key $ACCOUNT_KEY
 
@@ -107,18 +115,24 @@ jobs:
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
     
-    - name: Set Terraform Environment Variables
+    - name: Set Terraform Environment Variables and Mask Sensitive Values
       run: |
         # Set Service Principal credentials from previous job
-        echo "ARM_CLIENT_ID=${{ needs.setup-backend.outputs.client_id }}" >> $GITHUB_ENV
-        echo "ARM_CLIENT_SECRET=${{ needs.setup-backend.outputs.client_secret }}" >> $GITHUB_ENV
-        echo "ARM_SUBSCRIPTION_ID=${{ needs.setup-backend.outputs.subscription_id }}" >> $GITHUB_ENV
-        echo "ARM_TENANT_ID=${{ needs.setup-backend.outputs.tenant_id }}" >> $GITHUB_ENV
-        # Set Storage Access Key from previous job
-        echo "TERRAFORM_STATE_ACCESS_KEY=${{ needs.setup-backend.outputs.access_key }}" >> $GITHUB_ENV
+        ARM_CLIENT_ID="${{ needs.setup-backend.outputs.client_id }}"
+        ARM_CLIENT_SECRET="${{ needs.setup-backend.outputs.client_secret }}"
+        ARM_SUBSCRIPTION_ID="${{ needs.setup-backend.outputs.subscription_id }}"
+        ARM_TENANT_ID="${{ needs.setup-backend.outputs.tenant_id }}"
         
-        # Debug output (safely)
-        echo "Access key first 5 chars: ${TERRAFORM_STATE_ACCESS_KEY:0:5}..."
+        # Mask sensitive values in logs
+        echo "::add-mask::$ARM_SUBSCRIPTION_ID"
+        echo "::add-mask::$ARM_TENANT_ID"
+        echo "::add-mask::$ARM_CLIENT_ID"
+        
+        # Set environment variables
+        echo "ARM_CLIENT_ID=$ARM_CLIENT_ID" >> $GITHUB_ENV
+        echo "ARM_CLIENT_SECRET=$ARM_CLIENT_SECRET" >> $GITHUB_ENV
+        echo "ARM_SUBSCRIPTION_ID=$ARM_SUBSCRIPTION_ID" >> $GITHUB_ENV
+        echo "ARM_TENANT_ID=$ARM_TENANT_ID" >> $GITHUB_ENV
     
     - name: Verify Service Principal Permissions
       uses: azure/CLI@v2
@@ -151,15 +165,18 @@ jobs:
       id: fmt
       run: terraform fmt -check -recursive
       continue-on-error: true
+      
     - name: Get Storage Key
       run: |
         ACCOUNT_KEY=$(az storage account keys list --resource-group $TERRAFORM_STATE_RG --account-name $TERRAFORM_STATE_STORAGE --query [0].value -o tsv)
+        # Mask key in logs
+        echo "::add-mask::$ACCOUNT_KEY"
         echo "TERRAFORM_STATE_ACCESS_KEY=$ACCOUNT_KEY" >> $GITHUB_ENV
         
     - name: Terraform Initialize
       id: init
       run: |
-        echo "Running terraform init with access key starting with: ${TERRAFORM_STATE_ACCESS_KEY:0:5}..."
+        echo "Running terraform init..."
         terraform init \
           -backend-config="storage_account_name=$TERRAFORM_STATE_STORAGE" \
           -backend-config="container_name=$TERRAFORM_STATE_CONTAINER" \
@@ -172,7 +189,9 @@ jobs:
       
     - name: Terraform Plan
       id: plan
-      run: terraform plan -no-color -out=aks-tfplan -input=false
+      run: |
+        # Run terraform plan and filter output to redact sensitive information
+        terraform plan -no-color -out=aks-tfplan -input=false | sed 's/\(admin_group_object_ids.*=.*\[.*\]\)/\1 [REDACTED]/g'
       continue-on-error: true
     
     - uses: actions/github-script@v7
@@ -182,6 +201,10 @@ jobs:
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
+          // Filter the plan output to redact sensitive information
+          let plan = process.env.PLAN;
+          plan = plan.replace(/admin_group_object_ids\s*=\s*\[[^\]]*\]/g, "admin_group_object_ids = [REDACTED]");
+          
           const output = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
           #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
           #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
@@ -198,7 +221,7 @@ jobs:
           <details><summary>Show Plan</summary>
     
           \`\`\`\n
-          ${process.env.PLAN}
+          ${plan}
           \`\`\`
     
           </details>
@@ -220,13 +243,22 @@ jobs:
         path: ./tf/aks-tfplan
         retention-days: 1
 
+  terraform-approval:
+    name: Await Manual Approval
+    needs: [terraform-plan]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    environment: production # This creates the approval requirement
+    steps:
+      - name: Approval Step
+        run: echo "Deployment has been approved"
+
   terraform-apply:
     name: Apply AKS Cluster with Terraform
-    needs: [setup-backend, terraform-plan]
+    needs: [setup-backend, terraform-approval]
     runs-on: ubuntu-latest
     # Only run on main branch or manual workflow dispatch, not on PRs
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    environment: production # This creates the approval requirement
     defaults:
       run:
         working-directory: ./tf
@@ -240,18 +272,24 @@ jobs:
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
     
-    - name: Set Terraform Environment Variables
+    - name: Set Terraform Environment Variables and Mask Sensitive Values
       run: |
         # Set Service Principal credentials from previous job
-        echo "ARM_CLIENT_ID=${{ needs.setup-backend.outputs.client_id }}" >> $GITHUB_ENV
-        echo "ARM_CLIENT_SECRET=${{ needs.setup-backend.outputs.client_secret }}" >> $GITHUB_ENV
-        echo "ARM_SUBSCRIPTION_ID=${{ needs.setup-backend.outputs.subscription_id }}" >> $GITHUB_ENV
-        echo "ARM_TENANT_ID=${{ needs.setup-backend.outputs.tenant_id }}" >> $GITHUB_ENV
-        # Set Storage Access Key from previous job
-        echo "TERRAFORM_STATE_ACCESS_KEY=${{ needs.setup-backend.outputs.access_key }}" >> $GITHUB_ENV
+        ARM_CLIENT_ID="${{ needs.setup-backend.outputs.client_id }}"
+        ARM_CLIENT_SECRET="${{ needs.setup-backend.outputs.client_secret }}"
+        ARM_SUBSCRIPTION_ID="${{ needs.setup-backend.outputs.subscription_id }}"
+        ARM_TENANT_ID="${{ needs.setup-backend.outputs.tenant_id }}"
         
-        # Debug output (safely)
-        echo "Access key first 5 chars: ${TERRAFORM_STATE_ACCESS_KEY:0:5}..."
+        # Mask sensitive values in logs
+        echo "::add-mask::$ARM_SUBSCRIPTION_ID"
+        echo "::add-mask::$ARM_TENANT_ID"
+        echo "::add-mask::$ARM_CLIENT_ID"
+        
+        # Set environment variables
+        echo "ARM_CLIENT_ID=$ARM_CLIENT_ID" >> $GITHUB_ENV
+        echo "ARM_CLIENT_SECRET=$ARM_CLIENT_SECRET" >> $GITHUB_ENV
+        echo "ARM_SUBSCRIPTION_ID=$ARM_SUBSCRIPTION_ID" >> $GITHUB_ENV
+        echo "ARM_TENANT_ID=$ARM_TENANT_ID" >> $GITHUB_ENV
 
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
@@ -259,6 +297,8 @@ jobs:
     - name: Get Storage Key
       run: |
         ACCOUNT_KEY=$(az storage account keys list --resource-group $TERRAFORM_STATE_RG --account-name $TERRAFORM_STATE_STORAGE --query [0].value -o tsv)
+        # Mask key in logs
+        echo "::add-mask::$ACCOUNT_KEY"
         echo "TERRAFORM_STATE_ACCESS_KEY=$ACCOUNT_KEY" >> $GITHUB_ENV
         
     - name: Terraform Initialize
@@ -284,4 +324,10 @@ jobs:
         echo "✅ AKS Cluster deployed successfully!"
         echo "📁 Resource Group: $(terraform output -raw resource_group_name)"
         echo "🚢 AKS Cluster Name: $(terraform output -raw cluster_name)"
-        echo "🌐 AKS API Server: $(terraform output -raw host || echo 'Not available')"
+        # Avoid showing the full API server URL in logs
+        HOST=$(terraform output -raw host || echo 'Not available')
+        if [ "$HOST" != "Not available" ]; then
+          echo "🌐 AKS API Server: Available (URL masked for security)"
+        else
+          echo "🌐 AKS API Server: Not available"
+        fi
