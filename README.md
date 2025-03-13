@@ -14,7 +14,6 @@ This repository contains infrastructure as code (IaC) for deploying a production
 - ✅ **Key Vault** integration with CSI secrets provider
 - ✅ **Log Analytics** workspace for monitoring and diagnostics
 - ✅ **Automated Deployment** with GitHub Actions CI/CD pipeline
-- ✅ **Security Scanning** with Checkov for infrastructure validation
 
 ## 🚀 Quick Start
 
@@ -76,27 +75,6 @@ az ad app permission grant --id APP_ID --api 00000003-0000-0000-c000-00000000000
 
    # Apply changes
    terraform apply
-
-```
-
-## 🧪 Testing
-
-The infrastructure is tested using Terraform's built-in testing framework. To run tests:
-
-```sh
-   cd terraform
-   terraform test
-```
-
-## 🔍 Security Scanning
-Run security scanning with Checkov:
-
-```sh
-# Install Checkov
-pip install checkov
-
-# Scan Terraform code
-checkov -d terraform/
 
 ```
 
