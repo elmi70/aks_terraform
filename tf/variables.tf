@@ -88,3 +88,14 @@ variable "log_analytics_retention_days" {
     error_message = "Log Analytics retention days must be between 30 and 730."
   }
 }
+variable "subscription_id" {
+  description = "The Azure subscription ID"
+  type        = string
+  sensitive   = true
+}
+
+variable "tenant_id" {
+  description = "The Azure tenant ID"
+  type        = string
+  sensitive   = true
+}
