@@ -2,7 +2,9 @@ data "azurerm_kubernetes_service_versions" "current" {
   location        = var.location
   include_preview = false
 }
-
+locals {
+  sensitive_admin_group_ids = sensitive([data.azuread_group.aks_admins.object_id])
+}
 data "azuread_group" "aks_admins" {
   display_name     = "aksadmins"
   security_enabled = true
@@ -69,7 +71,7 @@ resource "azurerm_kubernetes_cluster" "aks" {
 
   # Azure AD integration
   azure_active_directory_role_based_access_control {
-    admin_group_object_ids = [data.azuread_group.aks_admins.object_id]
+    admin_group_object_ids = local.sensitive_admin_group_ids
     azure_rbac_enabled     = false
   }
 
