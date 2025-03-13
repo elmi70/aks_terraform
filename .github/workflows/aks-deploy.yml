@@ -151,7 +151,11 @@ jobs:
       id: fmt
       run: terraform fmt -check -recursive
       continue-on-error: true
-    
+    - name: Get Storage Key
+      run: |
+        ACCOUNT_KEY=$(az storage account keys list --resource-group $TERRAFORM_STATE_RG --account-name $TERRAFORM_STATE_STORAGE --query [0].value -o tsv)
+        echo "TERRAFORM_STATE_ACCESS_KEY=$ACCOUNT_KEY" >> $GITHUB_ENV
+        
     - name: Terraform Initialize
       id: init
       run: |
