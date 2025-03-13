@@ -4,7 +4,7 @@ data "azurerm_kubernetes_service_versions" "current" {
 }
 
 data "azuread_group" "aks_admins" {
-  display_name     = "AKS-Admins"
+  display_name     = "aksadmins"
   security_enabled = true
 }
 
