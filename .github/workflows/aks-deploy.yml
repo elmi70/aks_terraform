@@ -1,0 +1,228 @@
+name: 'AKS Cluster Deployment'
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'tf/**'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'tf/**'
+  workflow_dispatch:
+
+env:
+  LOCATION: westeurope
+  TERRAFORM_STATE_RG: aks-tfstate-rg
+  TERRAFORM_STATE_STORAGE: akstfstatesahal
+  TERRAFORM_STATE_CONTAINER: tfstate
+  TERRAFORM_STATE_KEY: aks-cluster.tfstate
+  TERRAFORM_STATE_ACCESS_KEY: "" # will be set later
+
+jobs:
+  setup-backend:
+    name: Setup AKS Terraform State Backend
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Login to Azure
+      uses: azure/login@v2
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Extract Service Principal Credentials
+      run: |
+        # Extract credentials from AZURE_CREDENTIALS JSON
+        ARM_CLIENT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientId')
+        ARM_CLIENT_SECRET=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientSecret')
+        ARM_SUBSCRIPTION_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.subscriptionId')
+        ARM_TENANT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.tenantId')
+        
+        # Set as environment variables for Terraform
+        echo "ARM_CLIENT_ID=$ARM_CLIENT_ID" >> $GITHUB_ENV
+        echo "ARM_CLIENT_SECRET=$ARM_CLIENT_SECRET" >> $GITHUB_ENV
+        echo "ARM_SUBSCRIPTION_ID=$ARM_SUBSCRIPTION_ID" >> $GITHUB_ENV
+        echo "ARM_TENANT_ID=$ARM_TENANT_ID" >> $GITHUB_ENV
+      
+    - name: Create AKS Terraform State Storage
+      uses: azure/cli@v2
+      with:
+        azcliversion: latest
+        inlineScript: |
+          # Check if resource group exists
+          if ! az group show --name $TERRAFORM_STATE_RG &>/dev/null; then
+            echo "Creating resource group $TERRAFORM_STATE_RG"
+            az group create -n $TERRAFORM_STATE_RG -l $LOCATION
+          else
+            echo "Resource group $TERRAFORM_STATE_RG already exists"
+          fi
+          
+          # Check if storage account exists
+          if ! az storage account show --name $TERRAFORM_STATE_STORAGE --resource-group $TERRAFORM_STATE_RG &>/dev/null; then
+            echo "Creating storage account $TERRAFORM_STATE_STORAGE"
+            az storage account create -g $TERRAFORM_STATE_RG -l $LOCATION \
+              --name $TERRAFORM_STATE_STORAGE \
+              --sku Standard_LRS \
+              --encryption-services blob
+          else
+            echo "Storage account $TERRAFORM_STATE_STORAGE already exists"
+          fi
+          
+          # Retrieve the storage account key
+          ACCOUNT_KEY=$(az storage account keys list --resource-group $TERRAFORM_STATE_RG --account-name $TERRAFORM_STATE_STORAGE --query [0].value -o tsv)
+          
+          # Create a storage container (for the Terraform State)
+          az storage container create --name $TERRAFORM_STATE_CONTAINER --account-name $TERRAFORM_STATE_STORAGE --account-key $ACCOUNT_KEY
+
+          echo "TERRAFORM_STATE_ACCESS_KEY=$ACCOUNT_KEY" >> $GITHUB_ENV
+          echo "Terraform backend storage configured successfully in $TERRAFORM_STATE_RG"
+
+  deploy-aks:
+    name: Deploy AKS Cluster with Terraform
+    runs-on: ubuntu-latest
+    needs: [setup-backend]
+    defaults:
+      run:
+        working-directory: ./tf
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Login to Azure
+      uses: azure/login@v2
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Verify Service Principal Permissions
+      uses: azure/CLI@v2
+      with:
+        azcliversion: latest
+        inlineScript: |
+          echo "Verifying Azure resource permissions..."
+          # Test if we have contributor access
+          if az group list --query "[0:1].name" -o tsv &>/dev/null; then
+            echo "✅ Service principal has necessary Azure resource permissions"
+          else
+            echo "❌ Service principal is missing necessary resource permissions"
+            exit 1
+          fi
+          
+          echo "Verifying Azure AD permissions..."
+          # Test if we can list groups - requires Graph API permissions
+          if az ad group list --query "[0:1].displayName" -o tsv &>/dev/null; then
+            echo "✅ Service principal has necessary Graph API permissions"
+          else
+            echo "❌ Service principal is missing Graph API permissions"
+            echo "Make sure your service principal has Group.Read.All or Directory.Read.All permissions"
+            exit 1
+          fi
+        
+    - name: Get Terraform Backend Storage Key
+      uses: azure/CLI@v1
+      with:
+        azcliversion: latest
+        inlineScript: |
+          # Retrieve the storage account key
+          ACCOUNT_KEY=$(az storage account keys list --resource-group $TERRAFORM_STATE_RG --account-name $TERRAFORM_STATE_STORAGE --query [0].value -o tsv)
+          echo "TERRAFORM_STATE_ACCESS_KEY=$ACCOUNT_KEY" >> $GITHUB_ENV
+    
+    - name: Extract Service Principal Credentials
+      run: |
+        # Extract credentials from AZURE_CREDENTIALS JSON
+        ARM_CLIENT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientId')
+        ARM_CLIENT_SECRET=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientSecret')
+        ARM_SUBSCRIPTION_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.subscriptionId')
+        ARM_TENANT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.tenantId')
+        
+        # Set as environment variables for Terraform
+        echo "ARM_CLIENT_ID=$ARM_CLIENT_ID" >> $GITHUB_ENV
+        echo "ARM_CLIENT_SECRET=$ARM_CLIENT_SECRET" >> $GITHUB_ENV
+        echo "ARM_SUBSCRIPTION_ID=$ARM_SUBSCRIPTION_ID" >> $GITHUB_ENV
+        echo "ARM_TENANT_ID=$ARM_TENANT_ID" >> $GITHUB_ENV
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+  
+    - name: Terraform Format Check
+      id: fmt
+      run: terraform fmt -check -recursive
+      continue-on-error: true
+    
+    - name: Terraform Initialize
+      id: init
+      run: |
+        terraform init \
+          -backend-config="storage_account_name=$TERRAFORM_STATE_STORAGE" \
+          -backend-config="container_name=$TERRAFORM_STATE_CONTAINER" \
+          -backend-config="access_key=$TERRAFORM_STATE_ACCESS_KEY" \
+          -backend-config="key=$TERRAFORM_STATE_KEY"
+    
+    - name: Terraform Validate
+      id: validate
+      run: terraform validate -no-color
+  
+    - name: Terraform Test
+      id: test
+      run: terraform test -junit-xml=test_results.xml
+      continue-on-error: true
+    
+    - name: Test Summary
+      uses: test-summary/action@v2
+      with:
+        paths: "test_results.xml"
+      if: always()
+      
+    - name: Terraform Plan
+      id: plan
+      run: terraform plan -no-color -out=aks-tfplan -input=false
+      continue-on-error: true
+    
+    - uses: actions/github-script@v7
+      if: github.event_name == 'pull_request'
+      env:
+        PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const output = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+          #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+          #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
+          <details><summary>Validation Output</summary>
+    
+          \`\`\`\n
+          ${{ steps.validate.outputs.stdout }}
+          \`\`\`
+    
+          </details>
+    
+          #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
+    
+          <details><summary>Show Plan</summary>
+    
+          \`\`\`\n
+          ${process.env.PLAN}
+          \`\`\`
+    
+          </details>
+    
+          *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Working Directory: \`${{ env.tf_actions_working_dir }}\`, Workflow: \`${{ github.workflow }}\`*`;
+    
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: output
+          })
+
+    - name: Terraform Apply
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      run: terraform apply -auto-approve aks-tfplan -input=false
+
+    - name: AKS Cluster Information
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      run: |
+        echo "✅ AKS Cluster deployed successfully!"
+        echo "📁 Resource Group: $(terraform output -raw resource_group_name)"
+        echo "🚢 AKS Cluster Name: $(terraform output -raw cluster_name)"
+        echo "🌐 AKS API Server: $(terraform output -raw host || echo 'Not available')"
